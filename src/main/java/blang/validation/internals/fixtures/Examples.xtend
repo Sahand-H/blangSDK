@@ -73,10 +73,20 @@ import blang.distributions.Gompertz
 import blang.distributions.HyperGeometric
 import blang.distributions.BetaBinomial
 import blang.distributions.BetaNegativeBinomial
+import blang.distributions.Cauchy
 
 class Examples {
   
   public val List<Instance<? extends Model>> all = new ArrayList
+  
+  public val cauchy2 = add(
+    new Cauchy.Builder()
+    .setLocation(fixedReal(0.0))
+    .setScale(fixedReal(1.0))
+    .setRealization(latentReal)
+    .build,
+    realRealizationSquared
+  )
   
   public val betaBinomial = add(
   	new BetaBinomial.Builder()

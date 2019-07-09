@@ -35,6 +35,7 @@ import blang.distributions.Gumbel
 import blang.distributions.Gompertz
 import blang.distributions.HyperGeometric
 import blang.distributions.BetaBinomial
+import blang.distributions.Cauchy
 
 class BuiltInDistributions {
   
@@ -71,6 +72,7 @@ class BuiltInDistributions {
       documentClass(Weibull)
       documentClass(Gumbel)
       documentClass(Gompertz)
+      documentClass(Cauchy)
     ]
     
     section("Multivariate") [

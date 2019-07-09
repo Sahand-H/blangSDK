@@ -12,6 +12,7 @@ import org.apache.commons.math3.distribution.LaplaceDistribution;
 import org.apache.commons.math3.distribution.LogisticDistribution;
 import org.apache.commons.math3.distribution.PoissonDistribution;
 import org.apache.commons.math3.distribution.TDistribution;
+import org.apache.commons.math3.distribution.CauchyDistribution;
 
 import bayonet.math.NumericalUtils;
 import blang.types.DenseSimplex;
@@ -43,8 +44,14 @@ public class Generators // Warning: blang.distributions.Generators hard-coded in
         int result = new HypergeometricDistribution(generator(random), population, populationConditioned, numberOfDraws).sample();
         return result;
     }
+
+  /** */
+  public static double cauchy(Random random, double location, double scale)
+  {
+    return new CauchyDistribution(generator(random), location, scale).sample();	
+  }
     
-    /** */
+  /** */
   public static double gompertz(Random rand, double shape, double scale)
   {
     double percentile = rand.nextDouble();

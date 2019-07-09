@@ -1,0 +1,26 @@
+package blang.distributions
+
+/** The Cauchy or Lorentz distribution. Values in \([-\infty, \infty \). */
+model Cauchy {
+  random RealVar realization
+  /** The location/median parameter \(x_0 \in \mathbb{R} \).*/
+  param RealVar location
+ 
+  /** The scale parameter \(\gamma \). \(\gamma > 0 \) */
+  param RealVar scale
+  
+  laws {
+    logf(scale) {
+      if (scale <= 0.0) return NEGATIVE_INFINITY
+      return log(scale / PI)
+    }
+    logf(scale, location, realization) {
+      if (scale <= 0.0) return NEGATIVE_INFINITY
+      return - log(pow(scale, 2) + pow(realization - location, 2))
+    }
+  }
+ 
+  generate(rand) {
+    rand.cauchy(location, scale)
+ }
+}
