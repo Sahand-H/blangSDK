@@ -3,6 +3,8 @@ package blang.engines.internals
 import blang.engines.internals.Spline.MonotoneCubicSpline
 import org.apache.commons.math3.analysis.differentiation.DerivativeStructure
 
+import static extension xlinear.AutoDiff.*
+
 class SplineDerivatives {
   
   def static double derivative(MonotoneCubicSpline it, double _x) {
@@ -21,9 +23,6 @@ class SplineDerivatives {
      var i = 0;
      while (_x >= mX.get(i + 1)) {
          i += 1
-//         if (_x == mX.get(i)) {
-//             return mY.get(i)
-//         }
      }
      val h = mX.get(i + 1) - mX.get(i)
      val x = new DerivativeStructure(1, 1, 0, _x)
@@ -31,33 +30,5 @@ class SplineDerivatives {
      val result = (mY.get(i) * (1 + 2 * t) + h * mM.get(i) * t) * (1 - t) * (1 - t) + 
         (mY.get(i + 1) * (3 - 2 * t) + h * mM.get(i + 1) * (t - 1)) * t * t 
      return result.getPartialDerivative(1)
-  }
-  
-  def static DerivativeStructure *(Number a, DerivativeStructure x) {
-    return x.multiply(a.doubleValue) 
-  }
-  
-  def static DerivativeStructure *(DerivativeStructure x, DerivativeStructure y) {
-    return x.multiply(y) 
-  }
-  
-  def static DerivativeStructure +(DerivativeStructure x, DerivativeStructure y) {
-    return x.add(y) 
-  }
-  
-  def static DerivativeStructure +(Number a, DerivativeStructure x) {
-    return x.add(a.doubleValue) 
-  }
-  
-  def static DerivativeStructure -(DerivativeStructure x, Number a) {
-    return x.add(-a.doubleValue)
-  }
-  
-  def static DerivativeStructure -(Number a, DerivativeStructure x) {
-    return x.negate.add(a.doubleValue)
-  }
-  
-  def static DerivativeStructure /(DerivativeStructure x, Number a) {
-    return x.divide(a.doubleValue)
   }
 }

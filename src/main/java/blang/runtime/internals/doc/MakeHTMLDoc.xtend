@@ -2,10 +2,10 @@ package blang.runtime.internals.doc
 
 import java.io.File
 import java.util.Collection
-import blang.runtime.internals.doc.components.Document
+import blang.xdoc.components.Document
 import blang.runtime.internals.doc.contents.Home
-import blang.runtime.internals.doc.components.BootstrapHTMLRenderer
-import blang.runtime.internals.doc.components.DocElement
+import blang.xdoc.BootstrapHTMLRenderer
+import blang.xdoc.components.DocElement
 import blang.runtime.internals.doc.contents.GettingStarted
 import java.util.List
 import java.util.ArrayList
@@ -21,6 +21,7 @@ import blang.runtime.internals.doc.contents.BuiltInDistributions
 import blang.runtime.internals.doc.contents.BuiltInFunctions
 import blang.runtime.internals.doc.contents.Examples
 import blang.runtime.internals.doc.contents.BlangCLI
+import blang.runtime.internals.doc.contents.Javadoc
 
 class MakeHTMLDoc extends BootstrapHTMLRenderer {
   
@@ -38,7 +39,8 @@ class MakeHTMLDoc extends BootstrapHTMLRenderer {
     InputOutput::page,
     InferenceAndRuntime::page,
     CreatingTypes::page,
-    Testing::page
+    Testing::page,
+    Javadoc::page
   ]
   
   override protected List<String> recurse(DocElement page) {
@@ -99,7 +101,8 @@ class MakeHTMLDoc extends BootstrapHTMLRenderer {
   }
   
   new() {
-    super("Blang", documents)
+    super("Blang")
+    super.documents.addAll(documents)
   }
   
   def static void main(String [] args) {

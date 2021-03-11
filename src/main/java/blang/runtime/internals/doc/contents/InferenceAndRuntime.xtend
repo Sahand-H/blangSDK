@@ -1,12 +1,12 @@
 package blang.runtime.internals.doc.contents
 
-import blang.runtime.internals.doc.components.Document
+import blang.xdoc.components.Document
 import blang.runtime.internals.doc.Categories
 import blang.mcmc.SimplexSampler
 
-import static extension blang.runtime.internals.doc.DocElementExtensions.code
+import static extension blang.xdoc.DocElementExtensions.code
 import blang.types.DenseSimplex
-import blang.runtime.internals.doc.components.Code.Language
+import blang.xdoc.components.Code.Language
 
 class InferenceAndRuntime {
   
@@ -305,11 +305,10 @@ class InferenceAndRuntime {
           We point out that this decomposition is not possible for all models. In such cases, 
           it is often possible to rewrite the models to follow the rules outlined above. If not, 
           the user can also back off to inference methods that do not require a sequence of measures. 
-          This can be done with the command line arguments (also setting the inference engine to 
-          Parallel Tempering with a single chain (PT):
+          This can be done with the command line argument «SYMB»--engine MCMC«ENDSYMB» which is essentially a shortcut for:
         '''
         code(Language.text, 
-          '''--checkIsDAG false --engine.usePriorSamples false --stripped true --engine PT --engine.nChains 1 --engine.initialization COPIES''')
+          '''--checkIsDAG false --engine.usePriorSamples false --stripped true --engine PT --engine.nChains 1 --engine.nPassesPerScan 1 --engine.initialization COPIES''')
       ]
     ]
     

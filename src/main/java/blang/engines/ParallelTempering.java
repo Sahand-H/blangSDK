@@ -9,6 +9,7 @@ import java.util.Optional;
 import org.apache.commons.math3.stat.descriptive.SummaryStatistics;
 
 import bayonet.distributions.Random;
+import blang.engines.internals.LogSumAccumulator;
 import blang.engines.internals.ladders.EquallySpaced;
 import blang.engines.internals.ladders.TemperatureLadder;
 import blang.inits.Arg;
@@ -27,9 +28,9 @@ public class ParallelTempering
                          @DefaultValue("EquallySpaced")
   public TemperatureLadder ladder = new EquallySpaced();
   
-  @Arg(description = "If unspecified, use 8.") 
-                                  @DefaultValue("8")
-  public Optional<Integer> nChains = Optional.of(8);
+  @Arg
+        @DefaultValue("8")
+  public int nChains = 8;
   
   @Arg              @DefaultValue("true")
   public boolean usePriorSamples = true;
@@ -38,11 +39,12 @@ public class ParallelTempering
   public boolean reversible = false;
   
   // convention: state index 0 is room temperature (target of interest)
-  protected SampledModel [] states;
-  protected List<Double> temperingParameters;
+  public SampledModel [] states;
+  public List<Double> temperingParameters;
   protected Random [] parallelRandomStreams;
-  protected SummaryStatistics [] energies, swapAcceptPrs;
-  private int swapIndex = 0;
+  public SummaryStatistics [] energies, swapAcceptPrs;
+  protected LogSumAccumulator [] logSumLikelihoodRatios; // used by Stepping stone marginalization
+  protected int swapIndex = 0;
   protected boolean [] swapIndicators;
    
   public SampledModel getTargetState()
@@ -91,18 +93,28 @@ public class ParallelTempering
    */
   public double swapKernel(Random random, int i)
   {
+    final double acceptPr = swapAcceptPr(i);
+    if (random.nextBernoulli(acceptPr))
+      doSwap(i);
+    return acceptPr;
+  }
+  
+  public double swapAcceptPr(int i) 
+  {
     int j = i + 1;
-    double logRatio = 
-        states[i].logDensity(temperingParameters.get(j)) + states[j].logDensity(temperingParameters.get(i))
-      - states[i].logDensity(temperingParameters.get(i)) - states[j].logDensity(temperingParameters.get(j));
+    final double steppingStoneLogRatio = // recall: tempering parameter j is closer to prior
+        + states[j].logDensity(temperingParameters.get(i))   
+        - states[j].logDensity(temperingParameters.get(j)); // so for stepping stone we want the proposal to be the one closer to prior (this is IS so we want proposal to be wider)
+    
+    logSumLikelihoodRatios[i].add(steppingStoneLogRatio); 
+      
+    final double logRatio = steppingStoneLogRatio 
+        + states[i].logDensity(temperingParameters.get(j))
+        - states[i].logDensity(temperingParameters.get(i));
+        
     double acceptPr = Math.min(1.0, Math.exp(logRatio));
     if (Double.isNaN(acceptPr))
       acceptPr = 0.0; // should only happen right at the beginning
-    if (random.nextBernoulli(acceptPr))
-    {
-      swapIndicators[i] = true;
-      doSwap(i);
-    }
     return acceptPr;
   }
   
@@ -113,7 +125,7 @@ public class ParallelTempering
   public Optional<Double> thermodynamicEstimator() 
   {
     for (int c = 0; c < nChains(); c++)
-      if (states[c].outOfSupportDetected())
+      if (states[c].annealedOutOfSupportDetected() || states[c].nOtherAnnealedFactors() > 0)
         return Optional.empty();
     
     double sum = 0.0;
@@ -121,6 +133,18 @@ public class ParallelTempering
       sum += (temperingParameters.get(c) - temperingParameters.get(c+1)) * (energies[c].getMean() + energies[c+1].getMean())/ 2.0;
     }
     return Optional.of(-sum);
+  }
+  
+  public Optional<Double> steppingStoneEstimator() 
+  {
+    if (nChains() == 1) return Optional.empty();
+    
+    double result = 0.0;
+    for (int c = 0; c < nChains() - 1; c++) {
+      LogSumAccumulator accumulator = logSumLikelihoodRatios[c];
+      result += accumulator.logSum() - Math.log(accumulator.numberOfTerms());
+    }
+    return Optional.of(result);
   }
   
   private void doSwap(int i) 
@@ -131,6 +155,7 @@ public class ParallelTempering
     states[j] = tmp;
     states[i].setExponent(temperingParameters.get(i));
     states[j].setExponent(temperingParameters.get(j));
+    swapIndicators[i] = true;
   }
   
   public int nChains()
@@ -140,9 +165,9 @@ public class ParallelTempering
   
   public void initialize(SampledModel prototype, Random random)
   {
-    if (nChains.isPresent() && nChains.get() < 1)
+    if (nChains < 1)
       throw new RuntimeException("Number of tempering chains must be greater than zero.");
-    temperingParameters = ladder.temperingParameters(nChains.orElse(nThreads.numberAvailable()));
+    temperingParameters = ladder.temperingParameters(nChains);
     int nChains = temperingParameters.size();
     states = initStates(prototype, nChains);
     setAnnealingParameters(temperingParameters);
@@ -165,6 +190,9 @@ public class ParallelTempering
     
     swapAcceptPrs = initStats(nChains - 1);
     energies = initStats(nChains);
+    logSumLikelihoodRatios = new LogSumAccumulator[nChains - 1];
+    for (int i = 0; i < nChains - 1; i++)
+      logSumLikelihoodRatios[i] = new LogSumAccumulator(); 
   }
   
   private SampledModel [] initStates(SampledModel prototype, int nChains)
@@ -179,11 +207,11 @@ public class ParallelTempering
   }
   
   
-  private static SummaryStatistics[] initStats(int size)
+  public static SummaryStatistics[] initStats(int size)
   {
     SummaryStatistics[] result = new SummaryStatistics[size];
     for (int i = 0; i < size; i++)
-      result[i] = StaticUtils.summaryStatistics(0.0);
+      result[i] = StaticUtils.summaryStatistics();
     return result;
   }
 }

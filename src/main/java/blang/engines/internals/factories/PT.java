@@ -28,12 +28,13 @@ import blang.inits.experiments.ExperimentResults;
 import blang.System;
 import blang.inits.experiments.tabwriters.TabularWriter;
 import blang.inits.experiments.tabwriters.TidySerializer;
+import blang.inits.experiments.tabwriters.factories.CSV;
 import blang.io.BlangTidySerializer;
 import blang.runtime.Runner;
 import blang.runtime.SampledModel;
 import blang.runtime.internals.objectgraph.GraphAnalysis;
 import blang.types.StaticUtils;
-import briefj.BriefIO;
+import briefj.BriefLog;
 
 import static blang.engines.internals.factories.PT.MonitoringOutput.*;
 
@@ -53,6 +54,10 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
   @Arg            @DefaultValue("3")
   public double nPassesPerScan = 3;
   
+  @Arg(description = "Collect statistics every thinning iteration (=1 to always collect, >1 to save hard drive space)")
+         @DefaultValue("1")
+  public int thinning = 1;
+  
   @Arg               @DefaultValue("1")
   public Random random = new Random(1);
   
@@ -66,10 +71,17 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
   @Arg                       @DefaultValue("SCM")
   public InitType initialization = InitType.SCM; 
   
+  @Arg                                                                    @DefaultValue("steppingStone") 
+  public LogNormalizationEstimator logNormalizationEstimator = LogNormalizationEstimator.steppingStone;
+  
+  @Arg(description = "Use when huge number of chains are utilized. Statistics like energy, logLikelihood are only recorded for the first so many indices to avoid excessive output size.")         
+                               @DefaultValue("100")
+  public int statisticRecordedMaxChainIndex = 100;
+  
   @Override
   public void performInference() 
   {
-    List<Round> rounds = rounds(nScans, adaptFraction);
+    List<Round> rounds = rounds();
     int scanIndex = 0;
     for (Round round : rounds)
     {
@@ -79,12 +91,13 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
       {
         moveKernel(nPassesPerScan);
         recordEnergyStatistics(densitySerializer, scanIndex);
-        recordSamples(scanIndex);
+        if (scanIndex % thinning == 0)
+          recordSamples(scanIndex);
         if (nChains() > 1)
           swapAndRecordStatistics(scanIndex);
         scanIndex++;
       }
-      if (nChains() > 1) { // Note: in last round, this is done only for instrumentation purpose
+      if (nChains() > 1 && adaptFraction > 0.0) { // Note: in last round, this is done only for instrumentation purpose
         reportAcceptanceRatios(round); 
         reportParallelTemperingDiagnostics(round);
         MonotoneCubicSpline cumulativeLambdaEstimate = adapt(round.roundIndex == rounds.size() - 2);
@@ -99,7 +112,9 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
   @SuppressWarnings("unchecked")
   private void recordEnergyStatistics(BlangTidySerializer densitySerializer, int iter)  
   {
-    for (int i = 0; i < temperingParameters.size(); i++)  
+    if (temperingParameters.size() > statisticRecordedMaxChainIndex)
+      BriefLog.warnOnce("Only printing energy statistics for the first " + statisticRecordedMaxChainIndex + " chains, see statisticRecordedMaxChainIndex option in PT");
+    for (int i = 0; i < Math.min(temperingParameters.size(), statisticRecordedMaxChainIndex); i++)  
     {
       densitySerializer.serialize(states[i].logDensity(), SampleOutput.allLogDensities.toString(), 
         Pair.of(sampleColumn, iter), 
@@ -108,6 +123,16 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
       densitySerializer.serialize(energy, SampleOutput.energy.toString(), 
         Pair.of(sampleColumn, iter), 
         Pair.of(Column.chain, i));
+      final int nOutOfSupport = states[i].nOutOfSupport();
+      densitySerializer.serialize(nOutOfSupport, SampleOutput.nOutOfSupport.toString(), 
+          Pair.of(sampleColumn, iter), 
+          Pair.of(Column.chain, i));
+      final double otherAnnealed = states[i].sumOtherAnnealed();
+      if (otherAnnealed != 0.0) {
+        densitySerializer.serialize(otherAnnealed, SampleOutput.otherAnnealed.toString(), 
+            Pair.of(sampleColumn, iter), 
+            Pair.of(Column.chain, i));
+      }
     }
     densitySerializer.serialize(getTargetState().logDensity(), SampleOutput.logDensity.toString(), 
       Pair.of(sampleColumn, iter));
@@ -120,20 +145,25 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
   {
     List<Double> annealingParameters = new ArrayList<>(temperingParameters);
     Collections.reverse(annealingParameters);
-    List<Double> acceptanceProbabilities = Arrays.stream(swapAcceptPrs).map(stat -> stat.getMean()).collect(Collectors.toList());
+    List<Double> acceptanceProbabilities = Arrays.stream(swapAcceptPrs).map(stat -> {double result = stat.getMean(); if (result == 1.0) return 0.99999; if (Double.isFinite(result)) return result; else return 0.0;}).collect(Collectors.toList());
     Collections.reverse(acceptanceProbabilities);
     MonotoneCubicSpline cumulativeLambdaEstimate = EngineStaticUtils.estimateCumulativeLambda(annealingParameters, acceptanceProbabilities);
     if (targetAccept.isPresent() && finalAdapt)
     {
       List<Double> newPartition = EngineStaticUtils.targetAcceptancePartition(cumulativeLambdaEstimate, targetAccept.get());
       // here we need to take care of fact grid size may change
-      nChains = Optional.of(newPartition.size());
+      nChains = newPartition.size();
       initialize(states[0], random);
       setAnnealingParameters(newPartition);
     }
     else
-      setAnnealingParameters(EngineStaticUtils.fixedSizeOptimalPartition(cumulativeLambdaEstimate, annealingParameters.size()));
+      setAnnealingParameters(fixedSizeOptimalPartition(cumulativeLambdaEstimate, annealingParameters.size()));
     return cumulativeLambdaEstimate;
+  }
+  
+  protected List<Double> fixedSizeOptimalPartition(MonotoneCubicSpline cumulativeLambdaEstimate, int size) 
+  {
+    return EngineStaticUtils.fixedSizeOptimalPartition(cumulativeLambdaEstimate, size);
   }
   
   private void reportAcceptanceRatios(Round round) 
@@ -190,16 +220,16 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
     }
   }
 
-  @Override
-  public void check(GraphAnalysis analysis) 
+  @Override public void check(GraphAnalysis analysis) { return; }
+  
+  private List<Round> rounds() 
   {
-    // TODO: may want to check forward simulators ok
-    return;
+    double adaptFraction = nChains() == 1 ? 0.0 : this.adaptFraction;
+    return rounds(nScans, adaptFraction);
   }
   
-  private List<Round> rounds(int nScans, double _adaptFraction) 
+  public static List<Round> rounds(int nScans, double adaptFraction) 
   {
-    double adaptFraction = nChains() == 1 ? 0.0 : _adaptFraction;
     if (adaptFraction < 0.0 || adaptFraction >= 1.0)
       throw new RuntimeException();
     List<Round> result = new ArrayList<>();
@@ -227,6 +257,8 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
   }
   
   public static enum InitType { COPIES, FORWARD, SCM }
+  
+  public static enum LogNormalizationEstimator { thermodynamicIntegration, steppingStone }
   
   @Override
   public void setSampledModel(SampledModel model) 
@@ -280,6 +312,12 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
             states[chainIndex] = init;
           }
         }
+        double logNormEstimate = population.logNormEstimate();
+        System.out.println("Log normalization constant estimate: " + logNormEstimate);
+        results.getTabularWriter(Runner.LOG_NORMALIZATION_ESTIMATE).write(
+          Pair.of(Runner.LOG_NORMALIZATION_ESTIMATOR, "SCM-initialization"),
+          Pair.of(TidySerializer.VALUE, logNormEstimate)
+        );
         break;
       default : throw new RuntimeException();
     }
@@ -297,8 +335,9 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
   
   private void reportRoundStatistics(Round round)
   {
-    int movesPerScan = (int) (nChains() /* communication */ + nPassesPerScan * states[0].nPosteriorSamplers() /* exploration */);
-    System.out.formatln("Performing", round.nScans * states.length * movesPerScan, "moves...", 
+    long movesPerScan = (long) (nChains()/2 /* communication */ + nPassesPerScan * states[0].nPosteriorSamplers() * nChains() /* exploration */);
+    long nMoves =  movesPerScan * round.nScans;
+    System.out.formatln("Performing", nMoves, "moves...", 
       "[", 
         Pair.of("nScans", round.nScans), 
         Pair.of("nChains", states.length), 
@@ -340,8 +379,15 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
     
     // round trip information
     results.flushAll(); // make sure first the indicators are written
-    String swapIndicPath = new File(results.getFileInResultFolder(Runner.MONITORING_FOLDER), MonitoringOutput.swapIndicators + ".csv").getAbsolutePath();
-    Paths paths = new Paths(swapIndicPath, round.firstScanInclusive, round.lastScanExclusive);
+    File swapIndicsFile = CSV.csvFile(results.getFileInResultFolder(Runner.MONITORING_FOLDER), MonitoringOutput.swapIndicators.toString());
+    
+    if (round.isAdapt == false) {
+      writer(MonitoringOutput.swapIndicators).close(); // workaround when using compressed output: at least show path info at last round
+    }
+    
+    Paths paths = swapIndicsFile.getName().endsWith("csv") || !round.isAdapt
+      ? paths = new Paths(swapIndicsFile.getAbsolutePath(), round.firstScanInclusive, round.lastScanExclusive)
+      : null; // When using .csv.gz, we cannot flush part-way through
     
     double Lambda = Arrays.stream(swapAcceptPrs).map(stat -> 1.0 - stat.getMean()).mapToDouble(Double::doubleValue).sum();
     writer(MonitoringOutput.globalLambda).printAndWrite(
@@ -349,41 +395,73 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
       Pair.of(TidySerializer.VALUE, Lambda)
     );
     
-    int n = paths.nRejuvenations();
-    double tau = ((double) n / round.nScans);
-    writer(MonitoringOutput.actualTemperedRestarts).printAndWrite(
-      roundReport,
-      Pair.of(Column.count, n), 
-      Pair.of(Column.rate, tau)
-    );
+    double inefficiency = Arrays.stream(swapAcceptPrs).map(stat -> {double s = stat.getMean(); return (1.0 - s) / s;}).mapToDouble(Double::doubleValue).sum();
+    double timeToFirst = 2.0*nChains()*(1.0 + inefficiency);
+    double effectiveNScans = Math.max(0.0, round.nScans - timeToFirst);
+    
+    writer(MonitoringOutput.timeToFirstRestart).printAndWrite(
+        roundReport,
+        Pair.of(Column.time, timeToFirst), 
+        Pair.of(Column.effectiveNScans, effectiveNScans)
+      );
+    
+    if (paths != null) 
+    {
+      int n = paths.nRejuvenations();
+      double tau;
+      if (effectiveNScans == 0) tau = 0.0;
+      else tau = ((double) n / effectiveNScans);
+      writer(MonitoringOutput.actualTemperedRestarts).printAndWrite(
+        roundReport,
+        Pair.of(Column.count, n), 
+        Pair.of(Column.rate, tau)
+      );
+    }
     
     if (reversible)
       System.err.println("Using provably suboptimal reversible PT. Do this only for PT benchmarking. Asymptotic rate is zero in this regime.");
     else
     {
       double tauBar = 1.0 / (2.0 + 2.0 * Lambda);
-      double nBar = tauBar * round.nScans;
+      double nBar = tauBar * effectiveNScans;
       writer(asymptoticRoundTripBound).printAndWrite(
         roundReport,
         Pair.of(Column.count, nBar), 
         Pair.of(Column.rate, tauBar)
       );
+      
+      double tau = 1.0 / (2.0 + 2.0 * inefficiency);
+      double nTheoretical = tau * effectiveNScans;
+      writer(nonAsymptoticRountTrip).printAndWrite(
+          roundReport,
+          Pair.of(Column.count, nTheoretical), 
+          Pair.of(Column.rate, tau)
+        );
     }
     
-    Optional<Double> optionalLogNorm = thermodynamicEstimator();
-    if (optionalLogNorm.isPresent())
-      writer(MonitoringOutput.logNormalizationContantProgress).printAndWrite(
-        roundReport,
-        Pair.of(TidySerializer.VALUE, optionalLogNorm.get())
-      );
-    else
-      System.out.println("Thermodynamic integration disabled as support is being annealed\n"
-                       + "  Use \"--engine SCM\" for log normalization computation instead");
+    Optional<Double> optionalLogNorm = null;
+      if (logNormalizationEstimator == LogNormalizationEstimator.steppingStone)
+        optionalLogNorm = steppingStoneEstimator();
+      else if (logNormalizationEstimator == LogNormalizationEstimator.thermodynamicIntegration)
+        optionalLogNorm = thermodynamicEstimator();
+      else
+        throw new RuntimeException();
+      if (optionalLogNorm.isPresent())
+        writer(MonitoringOutput.logNormalizationContantProgress).printAndWrite(
+          roundReport,
+          Pair.of(TidySerializer.VALUE, optionalLogNorm.get())
+        );
+      else
+        System.out.println("To obtain an estimate of the marginal likelihood (log normalization), note that thermodynamic integration is disabled when the support is being annealed");
     
     // log normalization, again (this gets overwritten, so this will be the final estimate in the same format as SCM)
-    if (optionalLogNorm.isPresent())
-      BriefIO.write(results.getFileInResultFolder(Runner.LOG_NORM_ESTIMATE), "" + optionalLogNorm.get());
+    if (optionalLogNorm.isPresent() && !round.isAdapt)
+      results.getTabularWriter(Runner.LOG_NORMALIZATION_ESTIMATE).write(
+          Pair.of(Runner.LOG_NORMALIZATION_ESTIMATOR, logNormalizationEstimator),
+          Pair.of(TidySerializer.VALUE, optionalLogNorm.get())
+        );
   }
+
   
   private SCM scmDefault() {
     SCM scmDefault = new SCM();
@@ -401,21 +479,21 @@ public class PT extends ParallelTempering implements PosteriorInferenceEngine
   
   public static enum MonitoringOutput
   {
-    swapIndicators, swapStatistics, annealingParameters, swapSummaries, logNormalizationContantProgress, 
-    globalLambda, actualTemperedRestarts, asymptoticRoundTripBound, roundTimings, lambdaInstantaneous, cumulativeLambda
+    swapIndicators, swapStatistics, annealingParameters, swapSummaries, logNormalizationContantProgress, timeToFirstRestart, 
+    globalLambda, actualTemperedRestarts, asymptoticRoundTripBound, nonAsymptoticRountTrip, roundTimings, lambdaInstantaneous, cumulativeLambda
   }
   
   public static enum SampleOutput
   {
-    energy, logDensity, allLogDensities;
+    energy, logDensity, allLogDensities, nOutOfSupport, otherAnnealed;
   }
   
   public static enum Column
   {
-    chain, round, isAdapt, count, rate, lowest, average, beta
+    chain, round, isAdapt, count, rate, lowest, average, beta, time, effectiveNScans
   }
   
-  private static class Round
+  public static class Round
   {
     int nScans;
     int roundIndex = -1;

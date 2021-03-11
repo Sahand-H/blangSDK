@@ -1,11 +1,11 @@
 package blang.runtime.internals.doc.contents
 
-import blang.runtime.internals.doc.components.Document
+import blang.xdoc.components.Document
 import blang.runtime.internals.doc.Categories
 import blang.engines.internals.PosteriorInferenceEngine
 
-import static extension blang.runtime.internals.doc.DocElementExtensions.code
-import blang.runtime.internals.doc.components.Code.Language
+import static extension blang.xdoc.DocElementExtensions.code
+import blang.xdoc.components.Code.Language
 import blang.runtime.Runner
 
 class InputOutput {
@@ -198,7 +198,7 @@ class InputOutput {
             observed, use «SYMB»--excludeFromOutput«ENDSYMB»). We describe the format in more detail below.
           '''
           it += '''
-            «SYMB»«Runner.LOG_NORM_ESTIMATE»«ENDSYMB»«ENDSYMB»: estimate of the natural logarithm of the probability of the data 
+            «SYMB»«Runner.LOG_NORMALIZATION_ESTIMATE».csv«ENDSYMB»«ENDSYMB»: estimate of the natural logarithm of the probability of the data 
             (also known as the log of the normalization constant of the prior times the likelihood, integrating over the latent). 
             Only available for certain inference engines such as SCM.
           '''
